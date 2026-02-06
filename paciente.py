@@ -499,6 +499,55 @@ class MedicineDB:
         cursor.close()
         return pdfs
 
+    # ==================== FINANCEIRO (I106 LANCAMENTOS) ====================
+
+    def buscar_lancamentos(self, id_paciente, limite=50):
+        """Busca lancamentos financeiros do paciente"""
+        cursor = self.conn.cursor()
+
+        cursor.execute(f"""
+            SELECT FIRST {limite}
+                l.A106COD,
+                l.A106DATA,
+                l.A106VALOR,
+                l.A106TEXTO,
+                l.A106CATIPO,
+                l.A106NUM_DOCUMENTO,
+                l.A106OBSERVACAO,
+                l.A106DATA_REALIZADO,
+                l.A106VALOR_REALIZADO,
+                l.A106VAL_DESCONTO,
+                l.A106VAL_ACRESCIMO,
+                c.A104NOME
+            FROM I106LANCAMENTO l
+            LEFT JOIN I104CONTAS c ON l.A106FK104COD_CONTA = c.A104COD
+            INNER JOIN I115CLIENTE_FORNENCEDOR cf ON l.A106FK115COD_CLI_FORN = cf.A115COD
+            INNER JOIN M6PACIENTE p ON p.A6FKI115COD = cf.A115COD
+            WHERE p.A6COD = ?
+            AND l.A106ELIMINADO = 'N'
+            ORDER BY l.A106DATA DESC, l.A106COD DESC
+        """, (id_paciente,))
+
+        lancamentos = []
+        for row in cursor.fetchall():
+            lancamentos.append({
+                'id': row[0],
+                'data': row[1],
+                'valor': float(row[2]) if row[2] else 0,
+                'texto': row[3],
+                'tipo': row[4],
+                'num_documento': row[5],
+                'observacao': row[6],
+                'data_realizado': row[7],
+                'valor_realizado': float(row[8]) if row[8] else None,
+                'desconto': float(row[9]) if row[9] else None,
+                'acrescimo': float(row[10]) if row[10] else None,
+                'conta': row[11]
+            })
+
+        cursor.close()
+        return lancamentos
+
     def buscar_blob_pdf(self, blob_id):
         """Conecta ao banco blob correto e retorna os bytes do PDF"""
         blob_db_num = (blob_id // 5000) + 1

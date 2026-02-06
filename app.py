@@ -139,6 +139,13 @@ def api_documentos(id_paciente):
     return json_response(documentos)
 
 
+@app.route('/api/paciente/<int:id_paciente>/financeiro')
+def api_financeiro(id_paciente):
+    limite = request.args.get('limite', 50, type=int)
+    lancamentos = db.buscar_lancamentos(id_paciente, limite)
+    return json_response(lancamentos)
+
+
 @app.route('/api/paciente/<int:id_paciente>/pdfs')
 def api_pdfs(id_paciente):
     limite = request.args.get('limite', 50, type=int)
@@ -774,6 +781,7 @@ function renderPatient() {
             <div class="tab ${state.currentTab === 'preconsultas' ? 'active' : ''}" onclick="switchTab('preconsultas')">Sinais Vitais</div>
             <div class="tab ${state.currentTab === 'receitas' ? 'active' : ''}" onclick="switchTab('receitas')">Receitas</div>
             <div class="tab ${state.currentTab === 'documentos' ? 'active' : ''}" onclick="switchTab('documentos')">Documentos</div>
+            <div class="tab ${state.currentTab === 'financeiro' ? 'active' : ''}" onclick="switchTab('financeiro')">Financeiro</div>
             <div class="tab ${state.currentTab === 'pdfs' ? 'active' : ''}" onclick="switchTab('pdfs')">PDFs</div>
         </div>
 
@@ -908,6 +916,7 @@ function renderTabData(container, tab, data) {
         preconsultas: renderPreconsultas,
         receitas: renderReceitas,
         documentos: renderDocumentos,
+        financeiro: renderFinanceiro,
         pdfs: renderPDFs
     };
 
@@ -1031,6 +1040,61 @@ function renderDocumentos(container, data) {
         if (d.conteudo) {
             html += '<div class="record-body"><pre>' + esc(d.conteudo) + '</pre></div>';
         }
+        html += '</div>';
+    });
+    html += '</div></div>';
+    container.innerHTML = html;
+}
+
+function renderFinanceiro(container, data) {
+    // Calcular totais
+    let totalCredito = 0, totalDebito = 0;
+    data.forEach(l => {
+        if (l.tipo === 'C') totalCredito += l.valor;
+        else if (l.tipo === 'D') totalDebito += l.valor;
+    });
+
+    let html = '<div class="tab-content">';
+
+    // Resumo
+    html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">';
+    html += '<div class="vital-item" style="flex:1;min-width:150px;padding:12px"><div class="vital-label">Total Creditos</div><div class="vital-value" style="color:var(--success)">R$ ' + totalCredito.toLocaleString('pt-BR', {minimumFractionDigits: 2}) + '</div></div>';
+    html += '<div class="vital-item" style="flex:1;min-width:150px;padding:12px"><div class="vital-label">Total Debitos</div><div class="vital-value" style="color:var(--accent)">R$ ' + totalDebito.toLocaleString('pt-BR', {minimumFractionDigits: 2}) + '</div></div>';
+    html += '<div class="vital-item" style="flex:1;min-width:150px;padding:12px"><div class="vital-label">Lancamentos</div><div class="vital-value" style="color:var(--text)">' + data.length + '</div></div>';
+    html += '</div>';
+
+    // Lista
+    html += '<div class="card-list">';
+    data.forEach(l => {
+        const tipoLabel = l.tipo === 'C' ? 'Credito' : l.tipo === 'D' ? 'Debito' : l.tipo === 'T' ? 'Transferencia' : l.tipo;
+        const tipoClass = l.tipo === 'C' ? 'badge-atendido' : l.tipo === 'D' ? 'badge-cancelado' : 'badge-default';
+        const valorColor = l.tipo === 'C' ? 'var(--success)' : l.tipo === 'D' ? 'var(--accent)' : 'var(--text)';
+
+        html += '<div class="record-card">';
+        html += '<div class="record-header">';
+        html += '<span class="record-date">' + esc(l.data) + '</span>';
+        html += '<span style="font-size:16px;font-weight:600;color:' + valorColor + '">R$ ' + l.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2}) + '</span>';
+        html += '</div>';
+
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+        html += '<span class="badge ' + tipoClass + '">' + esc(tipoLabel) + '</span>';
+        if (l.conta) html += '<span style="font-size:12px;color:var(--text3)">' + esc(l.conta) + '</span>';
+        html += '</div>';
+
+        if (l.texto) html += '<div class="record-body">' + esc(l.texto) + '</div>';
+        if (l.observacao) html += '<div class="record-body" style="color:var(--text3);margin-top:4px">' + esc(l.observacao) + '</div>';
+
+        // Detalhes extras
+        let extras = [];
+        if (l.valor_realizado != null) extras.push('Realizado: R$ ' + l.valor_realizado.toLocaleString('pt-BR', {minimumFractionDigits: 2}));
+        if (l.desconto) extras.push('Desc: R$ ' + l.desconto.toLocaleString('pt-BR', {minimumFractionDigits: 2}));
+        if (l.acrescimo) extras.push('Acresc: R$ ' + l.acrescimo.toLocaleString('pt-BR', {minimumFractionDigits: 2}));
+        if (l.num_documento) extras.push('Doc: ' + l.num_documento);
+        if (l.data_realizado && l.data_realizado !== l.data) extras.push('Realiz: ' + l.data_realizado);
+        if (extras.length) {
+            html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + esc(extras.join(' | ')) + '</div>';
+        }
+
         html += '</div>';
     });
     html += '</div></div>';
