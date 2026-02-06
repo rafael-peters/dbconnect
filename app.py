@@ -4,6 +4,7 @@ Flask app com dark theme SPA
 """
 
 import json
+from decimal import Decimal
 from datetime import datetime, date, time
 from flask import Flask, jsonify, request, render_template_string, Response
 from paciente import MedicineDB, SITUACOES_AGENDA, TIPOS_DOCUMENTO, TIPOS_TELEFONE
@@ -24,6 +25,8 @@ class MedicineEncoder(json.JSONEncoder):
             return obj.strftime('%d/%m/%Y')
         if isinstance(obj, time):
             return obj.strftime('%H:%M')
+        if isinstance(obj, Decimal):
+            return float(obj)
         if isinstance(obj, bytes):
             try:
                 return obj.decode('cp1252')
@@ -137,6 +140,13 @@ def api_documentos(id_paciente):
     limite = request.args.get('limite', 30, type=int)
     documentos = db.buscar_documentos(id_paciente, limite)
     return json_response(documentos)
+
+
+@app.route('/api/paciente/<int:id_paciente>/procedimentos')
+def api_procedimentos(id_paciente):
+    limite = request.args.get('limite', 100, type=int)
+    procedimentos = db.buscar_procedimentos(id_paciente, limite)
+    return json_response(procedimentos)
 
 
 @app.route('/api/paciente/<int:id_paciente>/financeiro')
@@ -781,6 +791,7 @@ function renderPatient() {
             <div class="tab ${state.currentTab === 'preconsultas' ? 'active' : ''}" onclick="switchTab('preconsultas')">Sinais Vitais</div>
             <div class="tab ${state.currentTab === 'receitas' ? 'active' : ''}" onclick="switchTab('receitas')">Receitas</div>
             <div class="tab ${state.currentTab === 'documentos' ? 'active' : ''}" onclick="switchTab('documentos')">Documentos</div>
+            <div class="tab ${state.currentTab === 'procedimentos' ? 'active' : ''}" onclick="switchTab('procedimentos')">Procedimentos</div>
             <div class="tab ${state.currentTab === 'financeiro' ? 'active' : ''}" onclick="switchTab('financeiro')">Financeiro</div>
             <div class="tab ${state.currentTab === 'pdfs' ? 'active' : ''}" onclick="switchTab('pdfs')">PDFs</div>
         </div>
@@ -799,6 +810,7 @@ async function switchTab(tab) {
             (tab === 'identificacao' && t.textContent === 'Identificacao') ||
             (tab === 'evolucoes' && t.textContent === 'Evolucoes') ||
             (tab === 'preconsultas' && t.textContent === 'Sinais Vitais') ||
+            (tab === 'procedimentos' && t.textContent === 'Procedimentos') ||
             (tab === 'pdfs' && t.textContent === 'PDFs'));
     });
     // Simpler approach: re-render tabs
@@ -916,6 +928,7 @@ function renderTabData(container, tab, data) {
         preconsultas: renderPreconsultas,
         receitas: renderReceitas,
         documentos: renderDocumentos,
+        procedimentos: renderProcedimentos,
         financeiro: renderFinanceiro,
         pdfs: renderPDFs
     };
@@ -1046,6 +1059,50 @@ function renderDocumentos(container, data) {
     container.innerHTML = html;
 }
 
+function renderProcedimentos(container, data) {
+    let html = '<div class="tab-content">';
+
+    // Resumo
+    let totalValor = 0, totalQt = 0;
+    data.forEach(p => {
+        if (p.valor) totalValor += p.valor;
+        if (p.quantidade) totalQt += p.quantidade;
+    });
+
+    html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">';
+    html += '<div class="vital-item" style="flex:1;min-width:150px;padding:12px"><div class="vital-label">Total Procedimentos</div><div class="vital-value" style="color:var(--text)">' + data.length + '</div></div>';
+    if (totalValor > 0) {
+        html += '<div class="vital-item" style="flex:1;min-width:150px;padding:12px"><div class="vital-label">Valor Total</div><div class="vital-value" style="color:var(--success)">R$ ' + totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2}) + '</div></div>';
+    }
+    html += '</div>';
+
+    // Lista
+    html += '<div class="card-list">';
+    data.forEach(p => {
+        html += '<div class="record-card">';
+        html += '<div class="record-header">';
+        html += '<span class="record-date">' + esc(p.data) + ' ' + esc(p.hora || '') + '</span>';
+        html += '<span class="record-prof">' + esc(p.profissional || '') + '</span>';
+        html += '</div>';
+
+        html += '<div class="record-body" style="margin-bottom:6px">';
+        html += '<strong style="font-size:14px">' + esc(p.procedimento || '-') + '</strong>';
+        html += '</div>';
+
+        let details = [];
+        if (p.grupo) details.push('<span class="badge badge-agendado">' + esc(p.grupo) + '</span>');
+        if (p.valor) details.push('<span style="color:var(--success);font-weight:500">R$ ' + p.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2}) + '</span>');
+        if (p.quantidade && p.quantidade > 1) details.push('<span style="color:var(--text3)">Qt: ' + p.quantidade + '</span>');
+        if (details.length) {
+            html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' + details.join('') + '</div>';
+        }
+
+        html += '</div>';
+    });
+    html += '</div></div>';
+    container.innerHTML = html;
+}
+
 function renderFinanceiro(container, data) {
     // Calcular totais
     let totalCredito = 0, totalDebito = 0;
@@ -1081,6 +1138,7 @@ function renderFinanceiro(container, data) {
         if (l.conta) html += '<span style="font-size:12px;color:var(--text3)">' + esc(l.conta) + '</span>';
         html += '</div>';
 
+        if (l.procedimentos) html += '<div class="record-body" style="margin-bottom:4px"><strong style="color:var(--success)">' + esc(l.procedimentos) + '</strong></div>';
         if (l.texto) html += '<div class="record-body">' + esc(l.texto) + '</div>';
         if (l.observacao) html += '<div class="record-body" style="color:var(--text3);margin-top:4px">' + esc(l.observacao) + '</div>';
 

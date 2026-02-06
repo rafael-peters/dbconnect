@@ -499,6 +499,47 @@ class MedicineDB:
         cursor.close()
         return pdfs
 
+    # ==================== PROCEDIMENTOS (M28/M21/F1) ====================
+
+    def buscar_procedimentos(self, id_paciente, limite=100):
+        """Busca procedimentos realizados pelo paciente"""
+        cursor = self.conn.cursor()
+
+        cursor.execute(f"""
+            SELECT FIRST {limite}
+                a.A27DATA,
+                a.A27HORA_INI_AGENDA,
+                f1.A1NOME AS PROCEDIMENTO,
+                pa.A28VALOR,
+                pa.A28QT,
+                g.A15NOME AS GRUPO,
+                uc.A115NOME AS PROFISSIONAL
+            FROM M28PROCEDIMENTO_AGENDA pa
+            INNER JOIN M27AGENDA a ON pa.A28FK27COD_AGENDA = a.A27COD
+            LEFT JOIN M21PROCEDIMENTO p ON pa.A28FK21COD_PROCEDIMENTO = p.A21COD
+            LEFT JOIN F1PRODUTO f1 ON p.A21FKF1COD_PRODUTO = f1.A1COD
+            LEFT JOIN M15GRUPO_PROCEDIMENTO g ON pa.A28FK15COD_GRUPO = g.A15COD
+            LEFT JOIN M31USUARIO u ON a.A27FK31COD_USUARIO = u.A31COD
+            LEFT JOIN I115CLIENTE_FORNENCEDOR uc ON u.A31FKI115COD = uc.A115COD
+            WHERE a.A27FK6COD_PACIENTE = ?
+            ORDER BY a.A27DATA DESC, a.A27HORA_INI_AGENDA DESC
+        """, (id_paciente,))
+
+        procedimentos = []
+        for row in cursor.fetchall():
+            procedimentos.append({
+                'data': row[0],
+                'hora': row[1],
+                'procedimento': row[2],
+                'valor': float(row[3]) if row[3] else None,
+                'quantidade': row[4],
+                'grupo': row[5],
+                'profissional': row[6]
+            })
+
+        cursor.close()
+        return procedimentos
+
     # ==================== FINANCEIRO (I106 LANCAMENTOS) ====================
 
     def buscar_lancamentos(self, id_paciente, limite=50):
@@ -518,7 +559,16 @@ class MedicineDB:
                 l.A106VALOR_REALIZADO,
                 l.A106VAL_DESCONTO,
                 l.A106VAL_ACRESCIMO,
-                c.A104NOME
+                c.A104NOME,
+                (SELECT LIST(DISTINCT f1.A1NOME, ', ')
+                 FROM M28PROCEDIMENTO_AGENDA pa
+                 INNER JOIN M27AGENDA a ON pa.A28FK27COD_AGENDA = a.A27COD
+                 LEFT JOIN M21PROCEDIMENTO pr ON pa.A28FK21COD_PROCEDIMENTO = pr.A21COD
+                 LEFT JOIN F1PRODUTO f1 ON pr.A21FKF1COD_PRODUTO = f1.A1COD
+                 WHERE a.A27FK6COD_PACIENTE = p.A6COD
+                 AND a.A27DATA = l.A106DATA
+                 AND f1.A1NOME IS NOT NULL
+                ) AS PROCEDIMENTOS
             FROM I106LANCAMENTO l
             LEFT JOIN I104CONTAS c ON l.A106FK104COD_CONTA = c.A104COD
             INNER JOIN I115CLIENTE_FORNENCEDOR cf ON l.A106FK115COD_CLI_FORN = cf.A115COD
@@ -542,7 +592,8 @@ class MedicineDB:
                 'valor_realizado': float(row[8]) if row[8] else None,
                 'desconto': float(row[9]) if row[9] else None,
                 'acrescimo': float(row[10]) if row[10] else None,
-                'conta': row[11]
+                'conta': row[11],
+                'procedimentos': row[12]
             })
 
         cursor.close()
