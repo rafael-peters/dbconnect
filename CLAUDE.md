@@ -6,9 +6,11 @@ Script Python para acessar o banco de dados do **Medicine Dream** (sistema medic
 
 ## Arquitetura
 
-- **`paciente.py`** - Script unico com a classe `MedicineDB` que encapsula todas as queries.
+- **`paciente.py`** - Classe `MedicineDB` que encapsula todas as queries (pacientes, prontuario, PDFs).
+- **`app.py`** - Interface web Flask com dark theme (SPA). Roda em `http://localhost:5000`.
 - **`fbclient.dll`** + DLLs de suporte - Firebird client 64 bits (embedded renomeado).
 - Banco de dados remoto: `C:\Genesis\Medicine\Dados\Medicine.fdb` no servidor.
+- Bancos de blobs (PDFs): `C:\Genesis\Medicine\Dados\Medicine_blob{N}.fdb` no servidor.
 
 ## Conexao
 
@@ -39,6 +41,12 @@ Usa a biblioteca `fdb` com `fbclient.dll` carregada via `fdb.load_api()`.
 
 6. **Charset**: O banco usa `WIN1252`. Caracteres acentuados podem aparecer com encoding incorreto no terminal.
 
+7. **Blobs retornam BlobReader**: Campos blob do Firebird (como `A999BLOB` e `A171DOCUMENTO`) retornam `fdb.fbcore.BlobReader`, nao `bytes`. Sempre usar `.read()` para extrair os bytes. Tentar `bytes(blob)` causa `TypeError`.
+
+8. **Caminho dos blobs**: Os bancos de blob (`Medicine_blob{N}.fdb`) ficam em `C:\Genesis\Medicine\Dados\` no servidor, NAO em `G:\DADOS - Teste\`.
+
+9. **Colunas M250**: A tabela `M250DOCUMENTOS_OLE` NAO tem colunas `A250COD`, `A250DATA`, `A250HORA`, `A250FK31COD_USUARIO`. Os nomes reais sao: `A250ITEM`, `A250DATA_INSERCAO`, `A250TIPO_DOCUMENTO`, etc.
+
 ## Estrutura de tabelas - resumo rapido
 
 ### Paciente
@@ -55,19 +63,51 @@ Usa a biblioteca `fdb` com `fbclient.dll` carregada via `fdb.load_api()`.
 - `M54RECEITA_PRESCRITA` + `M55ITENS_PRESCRITOS` (receitas)
 - `M171DOCUMENTOS` (documentos do prontuario)
 
+### PDFs (blobs em bancos Firebird separados)
+
+Os PDFs NAO ficam no banco principal. Estao distribuidos em bancos shard separados.
+
+**Metadados** - `M250DOCUMENTOS_OLE` (no banco principal `Medicine.fdb`):
+- `A250FK6COD_PACIENTE` = FK paciente (usa `A6COD`)
+- `A250ITEM` = Numero sequencial do documento
+- `A250NOME` = Nome/descricao do documento
+- `A250DATA_INSERCAO` = Data de insercao (datetime)
+- `A250DOCUMENTO` = Conteudo OLE (geralmente nulo, o PDF real fica no blob)
+- `A259FK999COD_BLOB` = **ID do blob no banco shard** (chave para buscar o PDF)
+- `A250TIPO_DOCUMENTO` = Tipo do documento (ex: "PDF")
+- `A250FK10COD_GRUPO_HISTORICO` = FK grupo historico
+
+**Binarios** - `M999BLOBS` (em bancos shard `Medicine_blob{N}.fdb`):
+- `A999COD` = ID do blob (PK) - corresponde a `A259FK999COD_BLOB`
+- `A999BLOB` = Conteudo binario do PDF (retorna `fdb.fbcore.BlobReader`, usar `.read()`)
+
+**Localizacao dos shards:**
+- Caminho: `C:\Genesis\Medicine\Dados\Medicine_blob{N}.fdb` (no servidor `recepcao-novo`)
+- Formula: `N = (A259FK999COD_BLOB // 5000) + 1`
+- Credenciais: `SYSDBA` / `masterkey`
+- Exemplo: blob_id `23166` -> shard `5` -> `Medicine_blob5.fdb`
+
+**Armadilhas dos blobs:**
+1. O caminho `G:\DADOS - Teste` NAO funciona. O caminho correto e `C:\Genesis\Medicine\Dados`.
+2. O campo `A999BLOB` retorna `fdb.fbcore.BlobReader`, nao `bytes`. Usar `blob.read()` para obter os bytes.
+3. A tabela M250 NAO tem colunas `A250COD`, `A250DATA`, `A250HORA`, `A250FK31COD_USUARIO` (nomes que parecem logicos mas nao existem).
+
 ### Tabelas ainda nao implementadas
 - `M50ATENDIMENTO_TEXTO` - Historico geral (nao ligado a consulta)
 - `M87/M88/M89GESTACAO*` - Gestacao
-- `M250DOCUMENTOS_OLE` - PDFs (blobs)
 - `F1PRODUTO`, `M21PROCEDIMENTO`, `M122TABELA_INTERNA_PROCEDIMENTO` - Procedimentos
 
 ## Comandos uteis
 
 ```bash
-# Instalar dependencia
-pip install fdb
+# Instalar dependencias
+pip install fdb flask
 
-# Executar menu interativo
+# Interface web
+python app.py
+# -> http://localhost:5000
+
+# Menu interativo (terminal)
 python paciente.py
 
 # Usar como modulo

@@ -19,6 +19,16 @@ CONFIG = {
     'charset': 'WIN1252'
 }
 
+# PDFs ficam em bancos Firebird separados (shards)
+# Formula: blob_db_num = (blob_id // 5000) + 1
+# Caminho: BLOB_BASE_PATH\Medicine_blob{N}.fdb
+BLOB_BASE_PATH = r'C:\Genesis\Medicine\Dados'
+BLOB_CONFIG = {
+    'user': 'SYSDBA',
+    'password': 'masterkey',
+    'charset': 'WIN1252'
+}
+
 # Mapeamento de tipos de documentos
 TIPOS_DOCUMENTO = {
     '1': 'CPF',
@@ -457,6 +467,69 @@ class MedicineDB:
 
         cursor.close()
         return receitas
+
+    # ==================== PDFs (M250/M999 BLOBS) ====================
+
+    def buscar_pdfs(self, id_paciente, limite=50):
+        """Busca lista de PDFs do paciente (M250DOCUMENTOS_OLE)"""
+        cursor = self.conn.cursor()
+
+        cursor.execute(f"""
+            SELECT FIRST {limite}
+                d.A250ITEM,
+                d.A250NOME,
+                d.A250DATA_INSERCAO,
+                d.A259FK999COD_BLOB,
+                d.A250TIPO_DOCUMENTO
+            FROM M250DOCUMENTOS_OLE d
+            WHERE d.A250FK6COD_PACIENTE = ?
+            ORDER BY d.A250DATA_INSERCAO DESC
+        """, (id_paciente,))
+
+        pdfs = []
+        for row in cursor.fetchall():
+            pdfs.append({
+                'id': row[0],
+                'nome': row[1],
+                'data': row[2],
+                'blob_id': row[3],
+                'tipo': row[4]
+            })
+
+        cursor.close()
+        return pdfs
+
+    def buscar_blob_pdf(self, blob_id):
+        """Conecta ao banco blob correto e retorna os bytes do PDF"""
+        blob_db_num = (blob_id // 5000) + 1
+        blob_db_path = os.path.join(BLOB_BASE_PATH, f'Medicine_blob{blob_db_num}.fdb')
+
+        conn_blob = fdb.connect(
+            host=CONFIG['host'],
+            port=CONFIG['port'],
+            database=blob_db_path,
+            user=BLOB_CONFIG['user'],
+            password=BLOB_CONFIG['password'],
+            charset=BLOB_CONFIG['charset']
+        )
+
+        try:
+            cursor = conn_blob.cursor()
+            cursor.execute("""
+                SELECT A999BLOB
+                FROM M999BLOBS
+                WHERE A999COD = ?
+            """, (blob_id,))
+
+            row = cursor.fetchone()
+            if row and row[0]:
+                blob = row[0]
+                if hasattr(blob, 'read'):
+                    return blob.read()
+                return bytes(blob)
+            return None
+        finally:
+            conn_blob.close()
 
 
 # ==================== FORMATACAO ====================

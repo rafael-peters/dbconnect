@@ -263,10 +263,57 @@ A busca deve sempre usar `A6COD` para corresponder ao ID visivel no sistema. O `
 | `M88GESTACAO_EVOLUCAO` | Evolucao da gestacao |
 | `M89GESTACAO_FILHOS` | Filhos da gestacao |
 | `M60TIPO_PARTO` | Tipos de parto |
-| `M250DOCUMENTOS_OLE` | Documentos OLE/PDFs (ligados a blobs em `C:\Genesis\Medicine\Dados`) |
+| `M250DOCUMENTOS_OLE` | Metadados dos PDFs (**implementado** - ver secao PDFs abaixo) |
 | `F1PRODUTO` | Produtos |
 | `M21PROCEDIMENTO` | Procedimentos |
 | `M122TABELA_INTERNA_PROCEDIMENTO` | Tabela interna de procedimentos |
+
+### Tabelas de PDFs (blobs em bancos separados)
+
+Os PDFs do paciente NAO ficam no banco principal. O Medicine Dream distribui os arquivos binarios em bancos Firebird separados (shards), cada um com capacidade para 5000 blobs.
+
+#### `M250DOCUMENTOS_OLE` - Metadados dos PDFs (banco principal)
+
+| Campo | Descricao |
+|-------|-----------|
+| `A250FK6COD_PACIENTE` | FK paciente (usa `A6COD`) |
+| `A250ITEM` | Numero sequencial do documento |
+| `A250NOME` | Nome/descricao do documento |
+| `A250DATA_INSERCAO` | Data e hora de insercao |
+| `A250DOCUMENTO` | Conteudo OLE (geralmente nulo) |
+| `A259FK999COD_BLOB` | **ID do blob no banco shard** |
+| `A250TIPO_DOCUMENTO` | Tipo (ex: "PDF") |
+| `A250FK10COD_GRUPO_HISTORICO` | FK grupo historico |
+
+> **Nota:** Esta tabela NAO possui colunas `A250COD`, `A250DATA`, `A250HORA` ou `A250FK31COD_USUARIO`. Estes nomes parecem logicos mas nao existem - os nomes reais foram descobertos via metadata do Firebird (`RDB$RELATION_FIELDS`).
+
+#### `M999BLOBS` - Conteudo binario dos PDFs (bancos shard)
+
+| Campo | Descricao |
+|-------|-----------|
+| `A999COD` | ID do blob (PK) - corresponde a `A259FK999COD_BLOB` |
+| `A999BLOB` | Conteudo binario do PDF |
+
+> **Nota:** O campo `A999BLOB` retorna `fdb.fbcore.BlobReader`, nao `bytes` diretamente. Usar `blob.read()` para extrair os bytes. Tentar `bytes(blob)` causa `TypeError`.
+
+#### Arquitetura de shards
+
+```
+M250DOCUMENTOS_OLE (Medicine.fdb)          M999BLOBS (Medicine_blob{N}.fdb)
+  A250FK6COD_PACIENTE = A6COD                A999COD = A259FK999COD_BLOB
+  A250NOME = nome do documento               A999BLOB = conteudo binario (PDF)
+  A259FK999COD_BLOB = ID do blob  -------->
+```
+
+| Parametro | Valor |
+|-----------|-------|
+| **Caminho no servidor** | `C:\Genesis\Medicine\Dados\Medicine_blob{N}.fdb` |
+| **Formula do shard** | `N = (A259FK999COD_BLOB // 5000) + 1` |
+| **Credenciais** | `SYSDBA` / `masterkey` |
+| **Charset** | `WIN1252` |
+| **Exemplo** | blob_id `23166` -> shard `5` -> `Medicine_blob5.fdb` |
+
+> **Atencao:** O caminho `G:\DADOS - Teste` NAO funciona para os blobs. O caminho correto no servidor e `C:\Genesis\Medicine\Dados`.
 
 ---
 
@@ -297,6 +344,11 @@ M6PACIENTE (A6COD = ID do sistema)
     +-- A6COD <-- M54RECEITA_PRESCRITA (A54FK6COD_PACIENTE)
     |                +-- A54COD <-- M55ITENS_PRESCRITOS (A55FK54COD_RECEITA)
     +-- A6COD <-- M171DOCUMENTOS (A171FK6COD_PACIENTE)
+    +-- A6COD <-- M250DOCUMENTOS_OLE (A250FK6COD_PACIENTE) ** PDFs **
+                     |
+                     +-- A259FK999COD_BLOB --> M999BLOBS (A999COD)  [banco shard externo]
+                                                  Medicine_blob{N}.fdb
+                                                  N = (blob_id // 5000) + 1
 ```
 
 ---
@@ -311,7 +363,7 @@ M6PACIENTE (A6COD = ID do sistema)
 ### Dependencias
 
 ```bash
-pip install fdb
+pip install fdb flask
 ```
 
 ### Arquivos necessarios
@@ -320,6 +372,7 @@ Os seguintes arquivos devem estar na mesma pasta do script:
 
 | Arquivo | Descricao |
 |---------|-----------|
+| `app.py` | Interface web Flask (dark theme) |
 | `paciente.py` | Script principal |
 | `fbclient.dll` | Firebird client 64 bits |
 | `ib_util.dll` | Dependencia Firebird |
@@ -333,7 +386,19 @@ Os seguintes arquivos devem estar na mesma pasta do script:
 
 ## Uso
 
-### Menu interativo
+### Interface web
+
+```bash
+python app.py
+```
+
+Acesse `http://localhost:5000`. A interface permite:
+- Buscar pacientes por nome ou ID
+- Ver dados completos (identificacao, endereco, contatos, documentos)
+- Navegar pelas tabs: Consultas, Evolucoes, Sinais Vitais, Receitas, Documentos, PDFs
+- Visualizar PDFs inline no navegador
+
+### Menu interativo (terminal)
 
 ```bash
 python paciente.py
@@ -382,6 +447,11 @@ with MedicineDB() as db:
     preconsultas = db.buscar_preconsultas(50482)
     receitas = db.buscar_receitas(50482)
     documentos = db.buscar_documentos(50482)
+
+    # PDFs
+    pdfs = db.buscar_pdfs(50482)
+    if pdfs:
+        pdf_bytes = db.buscar_blob_pdf(pdfs[0]['blob_id'])
 ```
 
 ---
@@ -398,15 +468,20 @@ with MedicineDB() as db:
 
 5. **Nome da tabela**: `I115CLIENTE_FORNENCEDOR` tem um "N" extra (FORNE**N**CEDOR, nao FORNECEDOR).
 
+6. **Nomes de colunas nao sao previsíveis**: A tabela `M250DOCUMENTOS_OLE` nao segue o padrao esperado. Nao tem `A250COD` (PK), `A250DATA`, `A250HORA` ou `A250FK31COD_USUARIO`. Sempre consultar `RDB$RELATION_FIELDS` para descobrir colunas reais.
+
+7. **Blobs retornam BlobReader**: Campos blob do Firebird retornam `fdb.fbcore.BlobReader`, nao `bytes`. Usar `.read()` para extrair os dados. Chamar `bytes(blob)` causa `TypeError`.
+
+8. **Caminho dos bancos blob**: Os shards `Medicine_blob{N}.fdb` ficam em `C:\Genesis\Medicine\Dados\` no servidor (mesmo diretorio do banco principal). O caminho `G:\DADOS - Teste` nao funciona.
+
+9. **Documentos M171 retornam bytes**: O campo `A171DOCUMENTO` pode retornar `bytes` (encoding `WIN1252`), nao `str`. O JSON encoder precisa tratar isso com `decode('cp1252')`.
+
 ---
 
 ## Proximos passos
 
 - [ ] Implementar busca de procedimentos (`F1PRODUTO`, `M21PROCEDIMENTO`, `M122TABELA_INTERNA_PROCEDIMENTO`)
 - [ ] Implementar dados de gestacao (`M87GESTACAO`, `M88GESTACAO_EVOLUCAO`, `M89GESTACAO_FILHOS`)
-- [ ] Extrair PDFs de `M250DOCUMENTOS_OLE` (blobs em `C:\Genesis\Medicine\Dados`)
 - [ ] Investigar onde ficam os textos de consultas recentes (pos-2021)
-- [ ] Mapear tabelas de situacao de agenda para confirmar codigos
 - [ ] Adicionar filtro por data nas consultas e evolucoes
-- [ ] Criar interface web (Flask/FastAPI) para consultas
 - [ ] Exportar dados do paciente para PDF/relatorio
